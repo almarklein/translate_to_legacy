@@ -1,26 +1,44 @@
 # translate_to_legacy
 
 Single module to translate Python 3 code to Python 2.7. Write all your
-code in Python 3, and convert it to Python 2.7 during installation.
+code in Python 3, and convert it to Python 2.7 at install time.
+
+### Purpose
+
+Python 3 was first released in 2008. Initially people mostly wrote code
+in Python 2, and converted that to Python 3 using 2to3. Later, it became
+more popular to support both Python versions from a single code base
+using e.g. six.py. Although this works well, it restricts the developer
+from writing pretty Python 3 code. The aim of this project is to allow
+developers to write in Python 3, and support Python 2 using a
+translation step during installation.
 
 
-## Docs
+### Caveats
+
+For this to work, not all Python 3 functionality can be used. E.g. type
+annotations and the `@` operator.
+
+This module takes inspiration from lib3to2, but provides a leaner way
+to do the translation, so it fits in a single module that people can
+include in their projects. Many fixers work just as well, but some more
+advanced fixers (e.g. for imports) will not work as well as they do in
+lib3to2. To remedy this, we made it easy to add custom import
+translations.
 
 
 ### General usage
 
 ```
 from translate_to_legacy import LegacyPythonTranslator
-
 translator = LegacyPythonTranslator(code)
-translator.translate()
-new_code = translator.dump()
+new_code = translator.translate()
 ```
 
 TODO: how to use in a `setup.py`
 
 
-### The Translator
+### The translator
 
 The translator is the main class that manages the parsing and
 translation process. The fixes that it applies are implemented as
@@ -34,10 +52,38 @@ corresponding class attribute to None.
 
 The `BaseTranslator` class has the following attributes:
     
+* `translate()` - apply the fixers to the tokens and return the result
+  as a string. This should usually be all you need.
 * `tokens` - the list of found tokens.
-* `parse()` - parse the code to generate tokens (is called automatically).
-* `translate()` - apply the fixers to the tokens.
-* `dump()` - get the result as a string. 
+* `dump()` - get the result as a string (translate() calls this).
+
+
+
+### How to write a custom fixer
+
+To implement a custom fixer, create a subclass of the translator class and
+implement a method prefixed with `fix_`:
+    
+```
+class MyTranslator(LegacyPythonTranslator):
+    
+    def fix_range(self, token):
+        if token.type == 'identifier' and token.text == 'range':
+            if token.next_char == '(' and token.prev_char != '.':
+                token.fix = 'xrange'
+    
+    def fix_make_legacy_slow(self, token):
+        if token.type == 'keyword' and token.text == 'return':
+            indent = token.indentation * ' '
+            t = Token(token.total_text, 'custom', token.start, token.start)
+            t.fix = '\n%simport time; time.sleep(0.1)\n' % indent
+            return t
+```
+
+The code snippet above contains an example to make use of `xrange`,
+which is a standard fixer. One can see how the fix is applied by setting
+the `fix` attribute. In the second (less serious) fixer, a new token
+is returned to insert a piece of code.
 
 
 ### The tokens
@@ -55,7 +101,7 @@ attribute.
 The `Token` class has the following attributes:
     
 * `type` - the type of token: 'comment', 'string', 'keyword',
-    'number' or 'identifier'.
+  'number' or 'identifier'.
 * `total_text` - the total text that the token is part of.
 * `text` - the original text of the token.
 * `start` - the start position in the total text.
@@ -64,13 +110,9 @@ The `Token` class has the following attributes:
 * `prev_token` - the token to the left of this token.
 * `next_token` - the token to the right of this token.
 * `prev_char` - the first non-whitespace char to the left of this token
-    that is still on the same line.
+  that is still on the same line.
 * `next_char` - the first non-whitespace char to the right of this token
-    that is still on the same line.
+  that is still on the same line.
+* `line_tokens` - all (non-comment) tokens that are on the same line.
 * `find_forward()` - find the position of a character to the right.
 * `find_forward()` - find the position of a character to the left.
-
-
-### How to write a fixer
-
-TODO
