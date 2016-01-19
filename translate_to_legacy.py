@@ -13,6 +13,13 @@ from __future__ import print_function
 import re
 import sys
 
+# List of fixers from lib3to2: absimport annotations bitlength bool
+# bytes classdecorator collections dctsetcomp division except features
+# fullargspec funcattrs getcwd imports imports2 input int intern
+# itertools kwargs memoryview metaclass methodattrs newstyle next
+# numliterals open print printfunction raise range reduce setliteral
+# str super throw unittest unpacking with
+
 ALPHANUM = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
 
 KEYWORDS = set(['False', 'None', 'True', 'and', 'as', 'assert', 'break', 
@@ -61,9 +68,6 @@ class Token:
     def __repr__(self):
         return '<token %r>' % self.text
     
-    def __len__(self):
-        return self.end - self.start
-    
     def find_forward(self, s):
         """ Find the position of a character to the right.
         """
@@ -85,7 +89,8 @@ class Token:
         """ The first non-whitespace char to the left of this token
         that is still on the same line.
         """
-        i = max(0, self.find_backward('\n'))
+        i = self.find_backward('\n')
+        i = i if i >= 0 else 0
         line = self.total_text[i:self.start]
         line = re.sub(r"\s+", '', line)  # remove whitespace
         return line[-1:]  # return single char or empty string
@@ -95,7 +100,8 @@ class Token:
         """ Get the first non-whitespace char to the right of this token
         that is still on the same line.
         """
-        i = min(len(self.total_text), self.find_forward('\n'))
+        i = self.find_forward('\n')
+        i = i if i >= 0 else len(self.total_text)
         line = self.total_text[self.end:i]
         line = re.sub(r"\s+", '', line)  # remove whitespace
         return line[:1]  # return single char or empty string
@@ -108,6 +114,24 @@ class Token:
         line1 = self.total_text[i+1:self.start]
         line2 = line1.lstrip()
         return len(line1) - len(line2)
+    
+    @property
+    def line_tokens(self):
+        """ All (non-comment) tokens that are on the same line.
+        """
+        i1, i2 = self.find_backward('\n'), self.find_forward('\n')
+        i1 = i1 if i1 >= 0 else 0
+        i2 = i2 if i2 >= 0 else len(self.total_text) 
+        t = self
+        tokens = []
+        while t.prev_token and t.prev_token.start > i1:
+            t = t.prev_token
+        tokens.append(t)
+        while (t.next_token and t.next_token.end <= i2 and 
+               t.next_token.type != 'comment'):
+            t = t.next_token
+            tokens.append(t)
+        return tokens
 
 
 class BaseTranslator:
@@ -123,13 +147,12 @@ class BaseTranslator:
         """ The list of tokens.
         """
         if self._tokens is None:
-            self.parse()
+            self._parse()
         return self._tokens
     
-    def parse(self):
+    def _parse(self):
         """ Generate tokens by parsing the code.
         """
-        
         self._tokens = []
         pos = 0
         
@@ -168,7 +191,8 @@ class BaseTranslator:
         if match.group(1):
             # Comment
             start = match.start()
-            end = endProgs['#'].search(text, start).start()
+            end_match = endProgs['#'].search(text, start+1)
+            end = end_match.start() if end_match else len(text)
             return Token(text, 'comment', start, end)
         elif match.group(2) is not None:
             # String
@@ -188,7 +212,8 @@ class BaseTranslator:
                 return Token(text, 'identifier', *tokenArgs)
     
     def translate(self):
-        """ Translate the code by applying fixes to the tokens.
+        """ Translate the code by applying fixes to the tokens. Returns
+        the new code as a string.
         """
         
         # Collect fixers
@@ -198,14 +223,26 @@ class BaseTranslator:
                 fixers.append(getattr(self, name))
         
         # Apply fixers
-        for token in self.tokens:
+        new_tokens = []
+        for i, token in enumerate(self.tokens):
             for fixer in fixers:
-                fixer(token)
+                new_token = fixer(token)
+                if isinstance(new_token, Token):
+                    assert new_token.start == new_token.end
+                    if new_token.start <= token.start:
+                        new_tokens.append((i, new_token))
+                    else:
+                        new_tokens.append((i+1, new_token))
+                    
+        # Insert new tokens
+        for i, new_token in reversed(new_tokens):
+            self._tokens.insert(i, new_token)
+        
+        return self.dumps()
     
-    def dump(self):
+    def dumps(self):
         """ Return a string with the translated code.
         """
-        
         text = self._text
         pos = len(self._text)
         pieces = []
@@ -220,6 +257,24 @@ class BaseTranslator:
 class LegacyPythonTranslator(BaseTranslator):
     """ A Translator to translate Python 3 to Python 2.7.
     """
+    
+    def fix_future(self, token):
+        """ Fix print_function, absolute_import, with_statement.
+        """
+        status = getattr(self, '_future_status', 0)
+        if status == 2:
+            return  # Done
+        
+        imports = 'print_function, absolute_import, with_statement'
+        
+        if status == 0 and token.type == 'string':
+            self._future_status = 1  # docstring
+        elif token.type != 'comment':
+            self._future_status = 2  # done
+            i = max(0, token.find_backward('\n'))
+            t = Token(token.total_text, '', i, i)
+            t.fix = '\nfrom __future__ import %s\n' % imports
+            return t
     
     def fix_newstyle(self, token):
         """ Fix to always use new style classes.
@@ -237,8 +292,8 @@ class LegacyPythonTranslator(BaseTranslator):
             if token.text == 'class':
                 self._current_class = token.indentation, token.next_token.text
             elif token.text == 'def':
-                cls_indent, cls_name = getattr(self, '_current_class', (0, ''))
-                if token.indentation <= cls_indent:
+                indent, name = getattr(self, '_current_class', (0, ''))
+                if token.indentation <= indent:
                     self._current_class = 0, ''
         
         # Then check for super
@@ -247,7 +302,114 @@ class LegacyPythonTranslator(BaseTranslator):
                 i = token.find_forward(')')
                 sub = token.total_text[token.end:i+1]
                 if re.sub(r"\s+", '', sub) == '()':
-                    cls_indent, cls_name = getattr(self, '_current_class', (0, ''))
-                    if cls_name:
+                    indent, name = getattr(self, '_current_class', (0, ''))
+                    if name:
                         token.end = i + 1
-                        token.fix = 'super(%s, self)' % cls_name
+                        token.fix = 'super(%s, self)' % name
+    
+    def fix_unicode_literals(self, token):
+        if token.type == 'string':
+            if token.text.lstrip('r').startswith(('"', "'")):  # i.e. no b or u
+                token.fix = 'u' + token.text
+    
+    def fix_unicode(self, token):
+        if token.type == 'identifier':
+            if token.text == 'chr' and token.next_char == '(':
+                # Calling chr
+                token.fix = 'unichr'
+            elif token.text == 'str' and token.next_char == '(':
+                # Calling str
+                token.fix = 'unicode'
+            elif token.text == 'isinstance' and token.next_char == '(':
+                # Using str in isinstance
+                end = token.find_forward(')')
+                t = token.next_token
+                while t.next_token and t.next_token.start < end:
+                    t = t.next_token
+                    if t.text == 'str':
+                        t.fix = 'basestring'
+    
+    def fix_range(self, token):
+        if token.type == 'identifier' and token.text == 'range':
+            if token.next_char == '(' and token.prev_char != '.':
+                token.fix = 'xrange'
+    
+    def fix_encode(self, token):
+        if token.type == 'identifier' and token.text in('encode', 'decode'):
+            if token.next_char == '(' and token.prev_char == '.':
+                end = token.find_forward(')')
+                if not (token.next_token and token.next_token.start < end):
+                    token.fix = token.text + '("utf-8")'
+                    token.end = end
+    
+    def fix_getcwd(self, token):
+        """ Fix os.getcwd -> os.getcwdu
+        """
+        if token.type == 'identifier' and token.text == 'getcwd':
+            if token.next_char == '(':
+                token.fix = 'getcwdu'
+    
+    IMPORT_MAPPING = {
+            "reprlib": "repr",
+            "winreg": "_winreg",
+            "configparser": "ConfigParser",
+            "copyreg": "copy_reg",
+            "queue": "Queue",
+            "socketserver": "SocketServer",
+            "_markupbase": "markupbase",
+            "test.support": "test.test_support",
+            "dbm.bsd": "dbhash",
+            "dbm.ndbm": "dbm",
+            "dbm.dumb": "dumbdbm",
+            "dbm.gnu": "gdbm",
+            "html.parser": "HTMLParser",
+            "html.entities": "htmlentitydefs",
+            "http.client": "httplib",
+            "http.cookies": "Cookie",
+            "http.cookiejar": "cookielib",
+            "tkinter": "Tkinter",
+            "tkinter.dialog": "Dialog",
+            "tkinter._fix": "FixTk",
+            "tkinter.scrolledtext": "ScrolledText",
+            "tkinter.tix": "Tix",
+            "tkinter.constants": "Tkconstants",
+            "tkinter.dnd": "Tkdnd",
+            "tkinter.__init__": "Tkinter",
+            "tkinter.colorchooser": "tkColorChooser",
+            "tkinter.commondialog": "tkCommonDialog",
+            "tkinter.font": "tkFont",
+            "tkinter.messagebox": "tkMessageBox",
+            "tkinter.turtle": "turtle",
+            "urllib.robotparser": "robotparser",
+            "xmlrpc.client": "xmlrpclib",
+            "builtins": "__builtin__",
+            
+            # todo: this only works for a few of the most common urllib stuff
+            # need more advanced stuff to make it work for everything
+            "urllib.request": "urllib2",
+            "urllib.error": "urllib2",
+            "urllib.parse": "urlparse",
+            }
+    
+    def fix_imports(self, token):
+        if token.type == 'keyword' and token.text == 'import': 
+            tokens = token.line_tokens
+            
+            # For each import case ...
+            for name, replacement in self.IMPORT_MAPPING.items():
+                parts = name.split('.')
+                # Walk over tokens to find start of match
+                for i in range(len(tokens)):
+                    if tokens[i].text == parts[0]:
+                        # Is it a complete match?
+                        for j, part in enumerate(parts):
+                            if tokens[i+j].text != part:
+                                break
+                        else:
+                            # Match, marge tokens
+                            tokens[i].end = tokens[i+len(parts)-1].end
+                            tokens[i].fix = replacement
+                            for j in range(1, len(parts)):
+                                tokens[i+j].start = tokens[i+j].end = tokens[i].end
+                                tokens[i+j].fix = ''
+                            break  # we have found the match

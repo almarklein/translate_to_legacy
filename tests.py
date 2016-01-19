@@ -9,7 +9,7 @@ from pytest import raises
 from translate_to_legacy import Token, BaseTranslator, LegacyPythonTranslator
 
 
-def test_token():
+def test_token1():
     
     text = 'aa bb\ncc dd'
     
@@ -34,14 +34,21 @@ def test_token():
     assert t4.next_char == ''
     
 
-def test_indentation():
+def test_token2():
     text = 'foo\n  foo\n    foo'
     t1, t2, t3 = BaseTranslator(text).tokens
     assert t1.indentation == 0
     assert t2.indentation == 2
     assert t3.indentation == 4
-
-
+    
+    text = 'x\nfoo, bar, spam\nx, x # y'
+    tokens = BaseTranslator(text).tokens
+    assert [t.text for t in tokens[0].line_tokens] == ['x']
+    assert [t.text for t in tokens[1].line_tokens] == ['foo', 'bar', 'spam']
+    assert [t.text for t in tokens[2].line_tokens] == ['foo', 'bar', 'spam']
+    assert [t.text for t in tokens[3].line_tokens] == ['foo', 'bar', 'spam']
+    assert [t.text for t in tokens[4].line_tokens] == ['x', 'x']
+    
 def test_base_translator():
     
     raises(TypeError, BaseTranslator)
@@ -49,9 +56,9 @@ def test_base_translator():
     # Test small input, that tokens get initialized, and result is the same
     for text in ['', 'foo', 'foo, bar', 'foo, bar, spam']:
         t = BaseTranslator(text)
-        assert t.dump() == text
+        assert t.dumps() == text
         t.translate()
-        assert t.dump() == text
+        assert t.dumps() == text
         for token in t.tokens:
             assert hasattr(token,  'prev_token')
             assert hasattr(token,  'next_token')
@@ -60,14 +67,14 @@ def test_base_translator():
     text = 'spam = 3\ndef foo():\n  return XX\nfoo()'
     t = BaseTranslator(text)
     t.translate()
-    assert t.dump() == text
+    assert t.dumps() == text
     
     # Apply a manual fix, check that result is correct
     assert t.tokens[-2].text == 'XX'
     t.tokens[-2].fix = 'YYYY'
-    assert t.dump() == text.replace('XX', 'YYYY')
+    assert t.dumps() == text.replace('XX', 'YYYY')
     t.tokens[-2].fix = ''
-    assert t.dump() == text.replace('XX', '')
+    assert t.dumps() == text.replace('XX', '')
 
 
 def test_fix_newstyle():
@@ -79,9 +86,7 @@ def test_fix_newstyle():
     class Foo3(x, *bla):
         pass
     """
-    t = LegacyPythonTranslator(code)
-    t.translate()
-    new_code = t.dump()
+    new_code = LegacyPythonTranslator(code).translate()
     
     assert 'Foo1(object):' in new_code
     assert 'Foo2(X):' in new_code
@@ -102,9 +107,7 @@ def test_fix_super():
         super().x
     super().y
     """
-    t = LegacyPythonTranslator(code)
-    t.translate()
-    new_code = t.dump()
+    new_code = LegacyPythonTranslator(code).translate()
     
     # These should not have been touched
     assert 'super().x' in new_code
@@ -114,6 +117,111 @@ def test_fix_super():
     assert 'super(Foo, self).bar()' in new_code
     assert 'super(Foo, self).spam()' in new_code
     assert 'super(Foo2, self).eggs()' in new_code
+
+
+def test_fix_future():
+    code = """
+    foo = 2
+    """
+    new_code = LegacyPythonTranslator(code).translate()
+    assert new_code.count('from __future__ import ') == 1
+    assert new_code.index('__future__') < new_code.index('foo')
+    
+    code = """
+    # bla
+    'docstring'
+    foo = 2
+    """
+    new_code = LegacyPythonTranslator(code).translate()
+    assert new_code.count('from __future__ import ') == 1
+    assert new_code.index('__future__') < new_code.index('foo')
+    assert new_code.index('__future__') > new_code.index('bla')
+    assert new_code.index('__future__') > new_code.index('docstring')
+
+
+def test_fix_unicode_literals():
+    code = """
+    ''' a docstring
+    '''
+    r'''and another '''
+    a = 'x' ; b = "x" ; c = r'x' ; d = r"x" ;
+    k = u'x' ; l = b"x" ;
+    """
+    new_code = LegacyPythonTranslator(code).translate()
+    assert """a = u'x' """ in new_code
+    assert """b = u"x" """ in new_code
+    assert """c = ur'x' """ in new_code
+    assert """d = ur"x" """ in new_code
+    
+    assert """a = 'x' """ not in new_code
+    assert """d = r"x" """ not in new_code
+    
+    assert """k = u'x' """ in new_code
+    assert """l = b"x" """ in new_code
+
+
+def test_fix_unicode():
+    code = """
+    str(x)
+    chr(y)
+    bla = str
+    isinstance(x, str)
+    isinstance(y, (bytes, str))
+    """
+    new_code = LegacyPythonTranslator(code).translate()
+    assert "unicode(x)" in new_code
+    assert "unichr(y)" in new_code
+    assert "bla = str" in new_code
+    assert "isinstance(x, basestring)" in new_code
+    assert "isinstance(y, (bytes, basestring))" in new_code
+
+
+def test_fix_range():
+    code = """
+    range(1, 2, 3)
+    y.range()
+    """
+    new_code = LegacyPythonTranslator(code).translate()
+    assert 'xrange(1, 2, 3)' in new_code
+    assert 'y.range()' in new_code
+
+
+def test_fix_encode():
+    code = """
+    b = s.encode()
+    s = b.decode()
+    y = x.encode("ascii")
+    x = y.decode("ascii")
+    """
+    new_code = LegacyPythonTranslator(code).translate()
+    assert 's.encode("utf-8")' in new_code
+    assert 'b.decode("utf-8")' in new_code
+    assert 'x.encode(u"ascii")' in new_code
+    assert 'y.decode(u"ascii")' in new_code
+
+
+def test_fix_getcwd():
+    code = """
+    getcwd()
+    os.getcwd()
+    """
+    new_code = LegacyPythonTranslator(code).translate()
+    assert new_code.count('getcwd(') == 0
+    assert new_code.count('getcwdu(') == 2
+
+
+def test_fix_imports():
+    code = """
+    from urllib.request import urlopen
+    import urllib.request.urlopen as urlopen
+    import queue
+    from xx.yy import zz
+    """
+    new_code = LegacyPythonTranslator(code).translate()
+    assert 'from urllib2 import urlopen' in new_code
+    assert 'import urllib2.urlopen as urlopen' in new_code
+    assert 'import Queue' in new_code
+    assert 'from xx.yy import zz' in new_code
 
 
 if __name__ == '__main__':
