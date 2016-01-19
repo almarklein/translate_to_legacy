@@ -367,19 +367,6 @@ class LegacyPythonTranslator(BaseTranslator):
             "http.client": "httplib",
             "http.cookies": "Cookie",
             "http.cookiejar": "cookielib",
-            "tkinter": "Tkinter",
-            "tkinter.dialog": "Dialog",
-            "tkinter._fix": "FixTk",
-            "tkinter.scrolledtext": "ScrolledText",
-            "tkinter.tix": "Tix",
-            "tkinter.constants": "Tkconstants",
-            "tkinter.dnd": "Tkdnd",
-            "tkinter.__init__": "Tkinter",
-            "tkinter.colorchooser": "tkColorChooser",
-            "tkinter.commondialog": "tkCommonDialog",
-            "tkinter.font": "tkFont",
-            "tkinter.messagebox": "tkMessageBox",
-            "tkinter.turtle": "turtle",
             "urllib.robotparser": "robotparser",
             "xmlrpc.client": "xmlrpclib",
             "builtins": "__builtin__",
@@ -410,6 +397,7 @@ class LegacyPythonTranslator(BaseTranslator):
                             tokens[i].end = tokens[i+len(parts)-1].end
                             tokens[i].fix = replacement
                             for j in range(1, len(parts)):
-                                tokens[i+j].start = tokens[i+j].end = tokens[i].end
+                                tokens[i+j].start = tokens[i].end
+                                tokens[i+j].end = tokens[i].end
                                 tokens[i+j].fix = ''
                             break  # we have found the match

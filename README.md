@@ -24,7 +24,7 @@ to do the translation, so it fits in a single module that people can
 include in their projects. Many fixers work just as well, but some more
 advanced fixers (e.g. for imports) will not work as well as they do in
 lib3to2. To remedy this, we made it easy to add custom import
-translations.
+translations by adding entries to `Translator.IMPORT_MAPPING`.
 
 
 ### General usage
