@@ -3,6 +3,7 @@
 Single module to translate Python 3 code to Python 2.7. Write all your
 code in Python 3, and convert it to Python 2.7 at install time.
 
+
 ### Purpose
 
 Python 3 was first released in 2008. Initially people mostly wrote code
@@ -13,18 +14,19 @@ from writing pretty Python 3 code. The aim of this project is to allow
 developers to write in Python 3, and support Python 2 using a
 translation step during installation.
 
+This project is an alternative to lib3to2, but only uses a tokenizer
+(and not an ast parser), which makes it faster and small enough to fit
+in one module. This is enough to handle most fixes. Translations for
+imports are handled differently though, see below. Strings/unicode/bytes
+are also handled differtently (better IMHO) by this module.
 
-### Caveats
+
+### Limitations
 
 For this to work, not all Python 3 functionality can be used. E.g. type
-annotations and the `@` operator.
-
-This module takes inspiration from lib3to2, but provides a leaner way
-to do the translation, so it fits in a single module that people can
-include in their projects. Many fixers work just as well, but some more
-advanced fixers (e.g. for imports) will not work as well as they do in
-lib3to2. To remedy this, we made it easy to add custom import
-translations by adding entries to `Translator.IMPORT_MAPPING`.
+annotations, the `@` operator, and `nonlocal`. Further, not all relevant
+fixers might be implemented yet, because for now I've focussed on what
+I need. Fixers are easily added though (see below).
 
 
 ### General usage
@@ -51,6 +53,19 @@ from translate_to_legacy import LegacyPythonTranslator
 translator = LegacyPythonTranslator(code)
 new_code = translator.translate()
 ```
+
+### Translations for imports
+
+This module is capable of most of the same fixes as lib3to2 applies. Import
+translation is difficult though, and is only implemented for a few cases. To add
+your own case:
+```python
+LegacyPythonTranslator.IMPORT_MAPPING.update({
+    'urllib.parse.urlparse': 'urllib2.urlparse'})
+```
+
+... and then import using `import urllib.parse.urlparse as urlparse`.
+
 
 ### The translator
 

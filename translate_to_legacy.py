@@ -391,7 +391,7 @@ class LegacyPythonTranslator(BaseTranslator):
                 end = token.find_forward(')')
                 if not (token.next_token and token.next_token.start < end):
                     token.fix = token.text + '("utf-8")'
-                    token.end = end
+                    token.end = end + 1
     
     def fix_getcwd(self, token):
         """ Fix os.getcwd -> os.getcwdu
@@ -421,12 +421,7 @@ class LegacyPythonTranslator(BaseTranslator):
             "urllib.robotparser": "robotparser",
             "xmlrpc.client": "xmlrpclib",
             "builtins": "__builtin__",
-            
-            # todo: this only works for a few of the most common urllib stuff
-            # need more advanced stuff to make it work for everything
-            "urllib.request": "urllib2",
-            "urllib.error": "urllib2",
-            "urllib.parse": "urlparse",
+            "urllib.request.urlopen": "urllib2.urlopen",
             }
     
     def fix_imports(self, token):
