@@ -5,7 +5,7 @@
 
 """
 Single module to translate Python 3 code to Python 2.7. Write all your
-code in Python 3, and convert it to Python 2.7 during installation.
+code in Python 3, and convert it to Python 2.7 at install time.
 """
 
 from __future__ import print_function
@@ -41,10 +41,10 @@ tokenProg = re.compile(
 # For a comment or a type of string, get the RegExp program to matches the end
 endProgs = {
     "#": re.compile(r"\r?\n"),
-    "'": re.compile(r"(^|[^\\])(\\\\)*'"),
-    '"': re.compile(r'(^|[^\\])(\\\\)*"'),
-    "'''": re.compile(r"(^|[^\\])(\\\\)*'''"),
-    '"""': re.compile(r'(^|[^\\])(\\\\)*"""')
+    "'": re.compile(r"([^\\])(\\\\)*'"),
+    '"': re.compile(r'([^\\])(\\\\)*"'),
+    "'''": re.compile(r"([^\\])(\\\\)*'''"),
+    '"""': re.compile(r'([^\\])(\\\\)*"""'),
     }
 
 
@@ -195,10 +195,12 @@ class BaseTranslator:
             end = end_match.start() if end_match else len(text)
             return Token(text, 'comment', start, end)
         elif match.group(2) is not None:
-            # String
+            # String - we start the search for the end-char(s) at end-1,
+            # because our regexp has to allow for one char (which is
+            # not backslash) before the end char(s).
             start = match.start()
             string_style = match.group(3)
-            end = endProgs[string_style].search(text, start+1).end()
+            end = endProgs[string_style].search(text,  match.end() - 1).end()
             return Token(text, 'string', start, end)
         else:
             # Identifier ("a word or number") Find out whether it is a key word
@@ -257,6 +259,10 @@ class BaseTranslator:
 class LegacyPythonTranslator(BaseTranslator):
     """ A Translator to translate Python 3 to Python 2.7.
     """
+    
+    def dumps(self):
+        s = BaseTranslator.dumps(self)
+        return '# -*- coding: utf-8 -*-\n' + s
     
     def fix_future(self, token):
         """ Fix print_function, absolute_import, with_statement.
@@ -387,7 +393,8 @@ class LegacyPythonTranslator(BaseTranslator):
                 parts = name.split('.')
                 # Walk over tokens to find start of match
                 for i in range(len(tokens)):
-                    if tokens[i].text == parts[0]:
+                    if (tokens[i].text == parts[0] and
+                        len(tokens[i:]) >= len(parts)):
                         # Is it a complete match?
                         for j, part in enumerate(parts):
                             if tokens[i+j].text != part:
@@ -401,3 +408,16 @@ class LegacyPythonTranslator(BaseTranslator):
                                 tokens[i+j].end = tokens[i].end
                                 tokens[i+j].fix = ''
                             break  # we have found the match
+
+
+if __name__ == '__main__':
+    # Awesome for testing
+    
+    code = """
+    """
+    
+    t = LegacyPythonTranslator(code)
+    new_code = t.translate()
+    print(t.tokens)
+    print('---')
+    print(new_code)

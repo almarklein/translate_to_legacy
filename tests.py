@@ -11,12 +11,12 @@ from translate_to_legacy import Token, BaseTranslator, LegacyPythonTranslator
 
 def test_token1():
     
-    text = 'aa bb\ncc dd'
+    code = 'aa bb\ncc dd'
     
-    t1 = Token(text, '', 0, 2)
-    t2 = Token(text, '', 3, 5)
-    t3 = Token(text, '', 6, 8)
-    t4 = Token(text, '', 9, 11)
+    t1 = Token(code, '', 0, 2)
+    t2 = Token(code, '', 3, 5)
+    t3 = Token(code, '', 6, 8)
+    t4 = Token(code, '', 9, 11)
     
     assert t1.text == 'aa'
     assert t2.text == 'bb'
@@ -35,46 +35,96 @@ def test_token1():
     
 
 def test_token2():
-    text = 'foo\n  foo\n    foo'
-    t1, t2, t3 = BaseTranslator(text).tokens
+    code = 'foo\n  foo\n    foo'
+    t1, t2, t3 = BaseTranslator(code).tokens
     assert t1.indentation == 0
     assert t2.indentation == 2
     assert t3.indentation == 4
     
-    text = 'x\nfoo, bar, spam\nx, x # y'
-    tokens = BaseTranslator(text).tokens
+    code = 'x\nfoo, bar, spam\nx, x # y'
+    tokens = BaseTranslator(code).tokens
     assert [t.text for t in tokens[0].line_tokens] == ['x']
     assert [t.text for t in tokens[1].line_tokens] == ['foo', 'bar', 'spam']
     assert [t.text for t in tokens[2].line_tokens] == ['foo', 'bar', 'spam']
     assert [t.text for t in tokens[3].line_tokens] == ['foo', 'bar', 'spam']
     assert [t.text for t in tokens[4].line_tokens] == ['x', 'x']
-    
+
+
 def test_base_translator():
     
     raises(TypeError, BaseTranslator)
     
     # Test small input, that tokens get initialized, and result is the same
-    for text in ['', 'foo', 'foo, bar', 'foo, bar, spam']:
-        t = BaseTranslator(text)
-        assert t.dumps() == text
+    for code in ['', 'foo', 'foo, bar', 'foo, bar, spam']:
+        t = BaseTranslator(code)
+        assert t.dumps() == code
         t.translate()
-        assert t.dumps() == text
+        assert t.dumps() == code
         for token in t.tokens:
             assert hasattr(token,  'prev_token')
             assert hasattr(token,  'next_token')
     
     # Check same result on more realistic example
-    text = 'spam = 3\ndef foo():\n  return XX\nfoo()'
-    t = BaseTranslator(text)
+    code = 'spam = 3\ndef foo():\n  return XX\nfoo()'
+    t = BaseTranslator(code)
     t.translate()
-    assert t.dumps() == text
+    assert t.dumps() == code
     
     # Apply a manual fix, check that result is correct
     assert t.tokens[-2].text == 'XX'
     t.tokens[-2].fix = 'YYYY'
-    assert t.dumps() == text.replace('XX', 'YYYY')
+    assert t.dumps() == code.replace('XX', 'YYYY')
     t.tokens[-2].fix = ''
-    assert t.dumps() == text.replace('XX', '')
+    assert t.dumps() == code.replace('XX', '')
+
+
+def test_tokenization():
+    
+    # Comments
+    code = """# foo ''
+    # ''' x '''
+    # hi # hi
+    """
+    tokens = BaseTranslator(code).tokens
+    assert len(tokens) == 3
+    assert all([token.type == 'comment' for token in tokens])
+    
+    # Strings
+    code = """
+    ''' foo
+    '''
+    b''' bar
+    '''
+    'spam'
+    b'eggs'
+    ''
+    b''
+    """
+    tokens = BaseTranslator(code).tokens
+    assert len(tokens) == 6
+    assert all([token.type == 'string' for token in tokens])
+    
+    # Empty strings
+    for s in ('""', "''", 'b""', '""""""', "''''''", 'b""""""' ):
+        code = s + ' ' + s
+        tokens = BaseTranslator(code).tokens
+        assert len(tokens) == 2
+        assert all([token.type == 'string' for token in tokens])
+    
+    # Escaping strings
+    code = '" \\"  \\" "'
+    tokens = BaseTranslator(code).tokens
+    assert len(tokens) == 1
+    assert tokens[0].type == 'string'
+    
+    # Identifiers
+    for i, s in enumerate(('', 'foo', 'foo + bar1', 'foo, bar.spam2')):
+        tokens = BaseTranslator(s).tokens
+        assert len(tokens) == i
+        assert all([token.type == 'identifier' for token in tokens])
+
+
+## Fixers
 
 
 def test_fix_newstyle():
@@ -215,6 +265,7 @@ def test_fix_imports():
     from urllib.request import urlopen
     import urllib.request.urlopen as urlopen
     import queue
+    import urllib;
     from xx.yy import zz
     """
     new_code = LegacyPythonTranslator(code).translate()
@@ -222,6 +273,7 @@ def test_fix_imports():
     assert 'import urllib2.urlopen as urlopen' in new_code
     assert 'import Queue' in new_code
     assert 'from xx.yy import zz' in new_code
+    assert 'import urllib;' in new_code
 
 
 if __name__ == '__main__':
