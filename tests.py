@@ -6,7 +6,8 @@ import subprocess
 import pytest
 from pytest import raises
 
-from translate_to_legacy import Token, BaseTranslator, LegacyPythonTranslator
+from translate_to_legacy import (BaseTranslator, LegacyPythonTranslator,
+                                 Token, CancelTranslation)
 
 
 def test_token1():
@@ -117,11 +118,33 @@ def test_tokenization():
     assert len(tokens) == 1
     assert tokens[0].type == 'string'
     
+    # Numbers
+    for i, s in enumerate(('', '3', '0x10, 100',)):
+        tokens = BaseTranslator(s).tokens
+        assert len(tokens) == i
+        assert all([token.type == 'number' for token in tokens])
+    
+    # keywords
+    for i, s in enumerate(('', 'for', 'yield, return',)):
+        tokens = BaseTranslator(s).tokens
+        assert len(tokens) == i
+        assert all([token.type == 'keyword' for token in tokens])
+    
     # Identifiers
     for i, s in enumerate(('', 'foo', 'foo + bar1', 'foo, bar.spam2')):
         tokens = BaseTranslator(s).tokens
         assert len(tokens) == i
         assert all([token.type == 'identifier' for token in tokens])
+
+
+def test_cancel():
+    
+    code = """
+    from __future__ import print_function
+    bla
+    """
+    
+    raises(CancelTranslation, LegacyPythonTranslator(code).translate)
 
 
 ## Fixers
@@ -190,6 +213,10 @@ def test_fix_future():
 
 
 def test_fix_unicode_literals():
+    
+    if not hasattr(LegacyPythonTranslator, 'fix_unicode_literals'):
+        pytest.skip('Not using unicode literals fixer')
+    
     code = """
     ''' a docstring
     '''
@@ -246,8 +273,8 @@ def test_fix_encode():
     new_code = LegacyPythonTranslator(code).translate()
     assert 's.encode("utf-8")' in new_code
     assert 'b.decode("utf-8")' in new_code
-    assert 'x.encode(u"ascii")' in new_code
-    assert 'y.decode(u"ascii")' in new_code
+    assert 'x.encode("ascii")' in new_code
+    assert 'y.decode("ascii")' in new_code
 
 
 def test_fix_getcwd():
@@ -278,5 +305,4 @@ def test_fix_imports():
 
 if __name__ == '__main__':
     os.chdir(os.path.dirname(__file__))
-    pytest.main('-v -x --color=yes %s' % repr(__file__))
-
+    pytest.main('-v -x --color=yes %s' % repr(__file__).lstrip('u'))

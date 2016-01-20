@@ -29,14 +29,28 @@ translations by adding entries to `Translator.IMPORT_MAPPING`.
 
 ### General usage
 
-```
+In your `setup.py` add the following code (or similar):
+
+```python
+from translate_to_legacy import LegacyPythonTranslator
+if os.path.isdir(legacy_dir):
+    shutil.rmtree(legacy_dir)
+shutil.copytree(original_dir, legacy_dir)
+LegacyPythonTranslator.translate_dir(legacy_dir, skip=files_to_skip)
+``` 
+
+... and then use `package_dir={name: legacy_dir}` in `setup()` when
+installing on Python 2.7.
+
+
+For a bit more fine-grained control, here is how the translator class
+can be used to translate strings from individual files:
+
+```python
 from translate_to_legacy import LegacyPythonTranslator
 translator = LegacyPythonTranslator(code)
 new_code = translator.translate()
 ```
-
-TODO: how to use in a `setup.py`
-
 
 ### The translator
 
@@ -56,7 +70,11 @@ The `BaseTranslator` class has the following attributes:
   as a string. This should usually be all you need.
 * `tokens` - the list of found tokens.
 * `dump()` - get the result as a string (translate() calls this).
-
+* `translate_dir()` - classmethod to translate all .py files in the given
+  directory and its subdirectories. Skips files that match names
+  in skip (which can be full file names, absolute paths, and paths
+  relative to dirname). Any file that imports 'print_function'
+  from __future__ is cancelled.
 
 
 ### How to write a custom fixer

@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Source: https://github.com/almarklein/translate_to_legacy
 # Copyright (c) 2016, Almar Klein
 # The parser code and regexes are based on code by Rob Reilink from the
 # IEP project.
@@ -10,8 +11,8 @@ code in Python 3, and convert it to Python 2.7 at install time.
 
 from __future__ import print_function
 
+import os
 import re
-import sys
 
 # List of fixers from lib3to2: absimport annotations bitlength bool
 # bytes classdecorator collections dctsetcomp division except features
@@ -22,11 +23,11 @@ import sys
 
 ALPHANUM = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
 
-KEYWORDS = set(['False', 'None', 'True', 'and', 'as', 'assert', 'break', 
-        'class', 'continue', 'def', 'del', 'elif', 'else', 'except', 'finally', 
-        'for', 'from', 'global', 'if', 'import', 'in', 'is', 'lambda', 
-        'nonlocal', 'not', 'or', 'pass', 'raise', 'return', 'try', 'while', 
-        'with', 'yield'])
+KEYWORDS = set(['False', 'None', 'True', 'and', 'as', 'assert', 'break',
+                'class', 'continue', 'def', 'del', 'elif', 'else', 'except',
+                'finally', 'for', 'from', 'global', 'if', 'import', 'in', 'is',
+                'lambda', 'nonlocal', 'not', 'or', 'pass', 'raise', 'return',
+                'try', 'while', 'with', 'yield'])
 
 # This regexp is used to find the tokens
 tokenProg = re.compile(
@@ -38,7 +39,7 @@ tokenProg = re.compile(
     '([' + ALPHANUM + '_]+)'  	# Identifiers/numbers (group 1) or
     )
 
-# For a comment or a type of string, get the RegExp program to matches the end
+# regexps to find the end of a comment or string
 endProgs = {
     "#": re.compile(r"\r?\n"),
     "'": re.compile(r"([^\\])(\\\\)*'"),
@@ -46,6 +47,10 @@ endProgs = {
     "'''": re.compile(r"([^\\])(\\\\)*'''"),
     '"""': re.compile(r'([^\\])(\\\\)*"""'),
     }
+
+
+class CancelTranslation(RuntimeError):
+    pass  # to cancel a translation
 
 
 class Token:
@@ -135,7 +140,8 @@ class Token:
 
 
 class BaseTranslator:
-    """ Translate Python code.
+    """ Translate Python code. One translator instance is used to
+    translate one file.
     """
     
     def __init__(self, text):
@@ -218,9 +224,9 @@ class BaseTranslator:
         the new code as a string.
         """
         
-        # Collect fixers
+        # Collect fixers. Sort by name, so at least its consistent.
         fixers = []
-        for name in dir(self):
+        for name in sorted(dir(self)):
             if name.startswith('fix_'):
                 fixers.append(getattr(self, name))
         
@@ -254,6 +260,34 @@ class BaseTranslator:
             pos = t.start
         pieces.append(text[:pos])
         return ''.join(reversed(pieces))
+    
+    @classmethod
+    def translate_dir(cls, dirname, skip=()):
+        """ Classmethod to translate all .py files in the given
+        directory and its subdirectories. Skips files that match names
+        in skip (which can be full file names, absolute paths, and paths
+        relative to dirname). Any file that imports 'print_function'
+        from __future__ is cancelled.
+        """
+        dirname = os.path.normpath(dirname)
+        skip = [os.path.normpath(p) for p in skip]
+        for root, dirs, files in os.walk(dirname):
+            for fname in files:
+                if fname.endswith('.py'):
+                    filename = os.path.join(root, fname)
+                    relpath = os.path.relpath(filename, dirname)
+                    if fname in skip or relpath in skip or filename in skip:
+                        print('%s skipped: %r' % (cls.__name__, relpath))
+                        continue
+                    code = open(filename, 'rb').read().decode('utf-8')
+                    try:
+                        new_code = cls(code).translate()
+                    except CancelTranslation:
+                        print('%s cancelled: %r' % (cls.__name__, relpath))
+                    else:
+                        with open(filename, 'wb') as f:
+                            f.write(new_code.encode('utf-8'))
+                        print('%s translated: %r' % (cls.__name__, relpath))
 
 
 class LegacyPythonTranslator(BaseTranslator):
@@ -261,17 +295,27 @@ class LegacyPythonTranslator(BaseTranslator):
     """
     
     def dumps(self):
-        s = BaseTranslator.dumps(self)
-        return '# -*- coding: utf-8 -*-\n' + s
+        return '# -*- coding: utf-8 -*-\n' + BaseTranslator.dumps(self)
+    
+    def fix_cancel(self, token):
+        """ Cancel translation if using `from __future__ import print_function`
+        """
+        if (token.type == 'keyword' and token.text == 'from' and
+            token.next_token.text == '__future__' and
+            any([t.text == 'print_function' for t in token.line_tokens])):
+            # Assume this module is already Python 2.7 compatible; abort.
+            raise CancelTranslation()
     
     def fix_future(self, token):
         """ Fix print_function, absolute_import, with_statement.
         """
+        
         status = getattr(self, '_future_status', 0)
         if status == 2:
             return  # Done
         
-        imports = 'print_function, absolute_import, with_statement'
+        imports = ('print_function, absolute_import, ' +
+                   'with_statement, unicode_literals, division')
         
         if status == 0 and token.type == 'string':
             self._future_status = 1  # docstring
@@ -313,10 +357,11 @@ class LegacyPythonTranslator(BaseTranslator):
                         token.end = i + 1
                         token.fix = 'super(%s, self)' % name
     
-    def fix_unicode_literals(self, token):
-        if token.type == 'string':
-            if token.text.lstrip('r').startswith(('"', "'")):  # i.e. no b or u
-                token.fix = 'u' + token.text
+    # Note: we use "from __future__ import unicode_literals"
+    # def fix_unicode_literals(self, token):
+    #     if token.type == 'string':
+    #         if token.text.lstrip('r').startswith(('"', "'")):  # i.e. no b/u
+    #             token.fix = 'u' + token.text
     
     def fix_unicode(self, token):
         if token.type == 'identifier':
