@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Source: https://github.com/almarklein/translate_to_legacy
-# Copyright (c) 2016, Almar Klein
+# Copyright (c) 2016, Almar Klein - this code is subject to the BSD license
 # The parser code and regexes are based on code by Rob Reilink from the
 # IEP project.
 
@@ -129,7 +129,7 @@ class Token:
         i2 = i2 if i2 >= 0 else len(self.total_text) 
         t = self
         tokens = []
-        while t.prev_token and t.prev_token.start > i1:
+        while t.prev_token and t.prev_token.start >= i1:
             t = t.prev_token
         tokens.append(t)
         while (t.next_token and t.next_token.end <= i2 and 
@@ -206,7 +206,7 @@ class BaseTranslator:
             # not backslash) before the end char(s).
             start = match.start()
             string_style = match.group(3)
-            end = endProgs[string_style].search(text,  match.end() - 1).end()
+            end = endProgs[string_style].search(text, match.end() - 1).end()
             return Token(text, 'string', start, end)
         else:
             # Identifier ("a word or number") Find out whether it is a key word
@@ -294,17 +294,21 @@ class LegacyPythonTranslator(BaseTranslator):
     """ A Translator to translate Python 3 to Python 2.7.
     """
     
+    FUTURES = ('print_function', 'absolute_import', 'with_statement',
+               'unicode_literals', 'division')
+    
     def dumps(self):
         return '# -*- coding: utf-8 -*-\n' + BaseTranslator.dumps(self)
     
     def fix_cancel(self, token):
-        """ Cancel translation if using `from __future__ import print_function`
+        """ Cancel translation if using `from __future__ import xxx`
         """
-        if (token.type == 'keyword' and token.text == 'from' and
-            token.next_token.text == '__future__' and
-            any([t.text == 'print_function' for t in token.line_tokens])):
-            # Assume this module is already Python 2.7 compatible; abort.
-            raise CancelTranslation()
+        if token.type == 'keyword' and (token.text == 'from' and
+                                        token.next_token.text == '__future__'):
+            for future in self.FUTURES:
+                if any([t.text == future for t in token.line_tokens]):
+                    # Assume this module is already Python 2.7 compatible
+                    raise CancelTranslation()
     
     def fix_future(self, token):
         """ Fix print_function, absolute_import, with_statement.
@@ -314,16 +318,13 @@ class LegacyPythonTranslator(BaseTranslator):
         if status == 2:
             return  # Done
         
-        imports = ('print_function, absolute_import, ' +
-                   'with_statement, unicode_literals, division')
-        
         if status == 0 and token.type == 'string':
             self._future_status = 1  # docstring
         elif token.type != 'comment':
             self._future_status = 2  # done
             i = max(0, token.find_backward('\n'))
             t = Token(token.total_text, '', i, i)
-            t.fix = '\nfrom __future__ import %s\n' % imports
+            t.fix = '\nfrom __future__ import %s\n' % (', '.join(self.FUTURES))
             return t
     
     def fix_newstyle(self, token):
@@ -371,8 +372,12 @@ class LegacyPythonTranslator(BaseTranslator):
             elif token.text == 'str' and token.next_char == '(':
                 # Calling str
                 token.fix = 'unicode'
+            elif token.text == 'str' and (token.next_char == ')' and
+                                          token.prev_char == '(' and
+                                          token.line_tokens[0].text == 'class'):
+                token.fix = 'unicode'
             elif token.text == 'isinstance' and token.next_char == '(':
-                # Using str in isinstance
+                # Check for usage of str in isinstance
                 end = token.find_forward(')')
                 t = token.next_token
                 while t.next_token and t.next_token.start < end:
@@ -400,6 +405,54 @@ class LegacyPythonTranslator(BaseTranslator):
             if token.next_char == '(':
                 token.fix = 'getcwdu'
     
+    def fix_imports(self, token):
+        """ import xx.yy -> import zz
+        """
+        if token.type == 'keyword' and token.text == 'import': 
+            tokens = token.line_tokens
+            
+            # For each import case ...
+            for name, replacement in self.IMPORT_MAPPING.items():
+                parts = name.split('.')
+                # Walk over tokens to find start of match
+                for i in range(len(tokens)):
+                    if (tokens[i].text == parts[0] and
+                            len(tokens[i:]) >= len(parts)):
+                        # Is it a complete match?
+                        for j, part in enumerate(parts):
+                            if tokens[i+j].text != part:
+                                break
+                        else:
+                            # Match, marge tokens
+                            tokens[i].end = tokens[i+len(parts)-1].end
+                            tokens[i].fix = replacement
+                            for j in range(1, len(parts)):
+                                tokens[i+j].start = tokens[i].end
+                                tokens[i+j].end = tokens[i].end
+                                tokens[i+j].fix = ''
+                            break  # we have found the match
+    
+    def fix_imports2(self, token):
+        """ from xx.yy import zz -> from vv import zz
+        """
+        if token.type == 'keyword' and token.text == 'import': 
+            tokens = token.line_tokens
+            
+            # We use the fact that all imports keys consist of two names
+            if tokens[0].text == 'from' and len(tokens) == 5:
+                if tokens[3].text == 'import':
+                    xxyy = tokens[1].text + '.' + tokens[2].text
+                    name = tokens[4].text
+                    if xxyy in self.IMPORT_MAPPING2:
+                        for possible_module in self.IMPORT_MAPPING2[xxyy]:
+                            if name in self.PY2MODULES[possible_module]:
+                                tokens[1].fix = possible_module
+                                tokens[1].end = tokens[2].end
+                                tokens[2].start = tokens[2].end
+                                break
+
+
+    # Map simple import paths to new import import paths
     IMPORT_MAPPING = {
             "reprlib": "repr",
             "winreg": "_winreg",
@@ -421,33 +474,63 @@ class LegacyPythonTranslator(BaseTranslator):
             "urllib.robotparser": "robotparser",
             "xmlrpc.client": "xmlrpclib",
             "builtins": "__builtin__",
-            "urllib.request.urlopen": "urllib2.urlopen",
             }
     
-    def fix_imports(self, token):
-        if token.type == 'keyword' and token.text == 'import': 
-            tokens = token.line_tokens
-            
-            # For each import case ...
-            for name, replacement in self.IMPORT_MAPPING.items():
-                parts = name.split('.')
-                # Walk over tokens to find start of match
-                for i in range(len(tokens)):
-                    if (tokens[i].text == parts[0] and
-                        len(tokens[i:]) >= len(parts)):
-                        # Is it a complete match?
-                        for j, part in enumerate(parts):
-                            if tokens[i+j].text != part:
-                                break
-                        else:
-                            # Match, marge tokens
-                            tokens[i].end = tokens[i+len(parts)-1].end
-                            tokens[i].fix = replacement
-                            for j in range(1, len(parts)):
-                                tokens[i+j].start = tokens[i].end
-                                tokens[i+j].end = tokens[i].end
-                                tokens[i+j].fix = ''
-                            break  # we have found the match
+    
+    # Map import paths to ... a set of possible import paths
+    IMPORT_MAPPING2 = {
+        'urllib.request': ('urllib2', 'urllib'),
+        'urllib.error': ('urllib2', 'urllib'),
+        'urllib.parse': ('urllib2', 'urllib', 'urlparse'),
+        'dbm.__init__': ('anydbm', 'whichdb'),
+        'http.server': ('CGIHTTPServer', 'SimpleHTTPServer', 'BaseHTTPServer'),
+        'xmlrpc.server': ('DocXMLRPCServer', 'SimpleXMLRPCServer'),
+        }
+
+    # This defines what names are in specific Python 2 modules
+    PY2MODULES = {
+        'urllib2' : (
+            'AbstractBasicAuthHandler', 'AbstractDigestAuthHandler',
+            'AbstractHTTPHandler', 'BaseHandler', 'CacheFTPHandler',
+            'FTPHandler', 'FileHandler', 'HTTPBasicAuthHandler',
+            'HTTPCookieProcessor', 'HTTPDefaultErrorHandler',
+            'HTTPDigestAuthHandler', 'HTTPError', 'HTTPErrorProcessor',
+            'HTTPHandler', 'HTTPPasswordMgr',
+            'HTTPPasswordMgrWithDefaultRealm', 'HTTPRedirectHandler',
+            'HTTPSHandler', 'OpenerDirector', 'ProxyBasicAuthHandler',
+            'ProxyDigestAuthHandler', 'ProxyHandler', 'Request',
+            'StringIO', 'URLError', 'UnknownHandler', 'addinfourl',
+            'build_opener', 'install_opener', 'parse_http_list',
+            'parse_keqv_list', 'randombytes', 'request_host', 'urlopen'),
+        'urllib' : (
+            'ContentTooShortError', 'FancyURLopener', 'URLopener',
+            'basejoin', 'ftperrors', 'getproxies',
+            'getproxies_environment', 'localhost', 'pathname2url',
+            'quote', 'quote_plus', 'splitattr', 'splithost',
+            'splitnport', 'splitpasswd', 'splitport', 'splitquery',
+            'splittag', 'splittype', 'splituser', 'splitvalue',
+            'thishost', 'unquote', 'unquote_plus', 'unwrap',
+            'url2pathname', 'urlcleanup', 'urlencode', 'urlopen',
+            'urlretrieve',),
+        'urlparse' : (
+            'parse_qs', 'parse_qsl', 'urldefrag', 'urljoin',
+            'urlparse', 'urlsplit', 'urlunparse', 'urlunsplit'),
+        'dbm' : (
+            'ndbm', 'gnu', 'dumb'),
+        'anydbm' : (
+            'error', 'open'),
+        'whichdb' : (
+            'whichdb',),
+        'BaseHTTPServer' : (
+            'BaseHTTPRequestHandler', 'HTTPServer'),
+        'CGIHTTPServer' : (
+            'CGIHTTPRequestHandler',),
+        'SimpleHTTPServer' : (
+            'SimpleHTTPRequestHandler',),
+        'DocXMLRPCServer' : (
+            'DocCGIXMLRPCRequestHandler', 'DocXMLRPCRequestHandler',
+            'DocXMLRPCServer', 'ServerHTMLDoc', 'XMLRPCDocGenerator'),
+        }
 
 
 if __name__ == '__main__':

@@ -244,6 +244,7 @@ def test_fix_unicode():
     bla = str
     isinstance(x, str)
     isinstance(y, (bytes, str))
+    class Foo(str): pass
     """
     new_code = LegacyPythonTranslator(code).translate()
     assert "unicode(x)" in new_code
@@ -251,6 +252,7 @@ def test_fix_unicode():
     assert "bla = str" in new_code
     assert "isinstance(x, basestring)" in new_code
     assert "isinstance(y, (bytes, basestring))" in new_code
+    assert "Foo(unicode)" in new_code
 
 
 def test_fix_range():
@@ -297,7 +299,7 @@ def test_fix_imports():
     """
     new_code = LegacyPythonTranslator(code).translate()
     assert 'from urllib2 import urlopen' in new_code
-    assert 'import urllib2.urlopen as urlopen' in new_code
+    assert 'import urllib.request.urlopen as urlopen' in new_code
     assert 'import Queue' in new_code
     assert 'from xx.yy import zz' in new_code
     assert 'import urllib;' in new_code
