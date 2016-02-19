@@ -12,7 +12,7 @@ more popular to support both Python versions from a single code base
 using e.g. six.py. Although this works well, it restricts the developer
 from writing pretty Python 3 code. The aim of this project is to allow
 developers to write in Python 3, and support Python 2 using a
-translation step during installation.
+translation step at build time.
 
 This project is an alternative to lib3to2, but only uses a tokenizer
 (and not an ast parser), which makes it faster and small enough to fit
@@ -35,15 +35,9 @@ In your `setup.py` add the following code (or similar):
 
 ```python
 from translate_to_legacy import LegacyPythonTranslator
-if os.path.isdir(legacy_dir):
-    shutil.rmtree(legacy_dir)
 shutil.copytree(original_dir, legacy_dir)
 LegacyPythonTranslator.translate_dir(legacy_dir, skip=files_to_skip)
 ``` 
-
-... and then use `package_dir={name: legacy_dir}` in `setup()` when
-installing on Python 2.7.
-
 
 For a bit more fine-grained control, here is how the translator class
 can be used to translate strings from individual files:
@@ -54,17 +48,19 @@ translator = LegacyPythonTranslator(code)
 new_code = translator.translate()
 ```
 
-### Translations for imports
-
-This module is capable of most of the same fixes as lib3to2 applies. Import
-translation is difficult though, and is only implemented for a few cases. To add
-your own case:
-```python
-LegacyPythonTranslator.IMPORT_MAPPING.update({
-    'urllib.parse.urlparse': 'urllib2.urlparse'})
-```
-
-... and then import using `import urllib.parse.urlparse as urlparse`.
+To adopt this approach in your project and still allow single-source
+distribution:
+  
+* add one module to the root of your project.
+* in `setup.py`
+  [invoke the translation](https://github.com/zoofIO/flexx/blob/master/setup.py#L56)
+  at build time.
+* in the root `__init__.py` add 
+  [two lines](https://github.com/zoofIO/flexx/blob/master/flexx/__init__.py#L32-L33)
+  to make legacy Python use the translated code.
+* probably make a few modification to make the translations work correctly.
+* optionally add more translations by subclassing `LegacyPythonTranslator`.
+* resolve tricky situations like `isinstance(x, bytes)`.
 
 
 ### The translator
